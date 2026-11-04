@@ -1,0 +1,21 @@
+# ---- Vivado / xsim artefacts ----
+*.jou
+*.log
+*.str
+*.wdb
+*.wcfg
+*.vcd
+xsim.dir/
+.Xil/
+work/
+vivado_amc1306/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- editors / OS ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

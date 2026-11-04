@@ -1,0 +1,8 @@
+# keep source and data as LF regardless of the Windows checkout
+* text=auto eol=lf
+
+# batch files must stay CRLF for cmd.exe
+*.bat text eol=crlf
+
+# generated bit dumps: one 0/1 per line, never rewritten
+*.mem text eol=lf
