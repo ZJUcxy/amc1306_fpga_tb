@@ -1,0 +1,5 @@
+case,pi_bandwidth_Hz,rise_ms,overshoot_pct,settle_ms,ss_err_pct,ripple_A,final_A
+A  ideal sensor,800,0.372,7.78,1.33,-0.07,0.0520,5.0033
+B  AMC1306 + sinc3,800,0.368,11.82,1.62,-0.02,0.0422,5.0010
+C  + 51-tap FIR (same gains),800,0.355,98.10,30.00,-3.00,0.8538,5.1502
+D  + 51-tap FIR (retuned),150,0.831,18.28,18.35,-0.28,0.1121,5.0139

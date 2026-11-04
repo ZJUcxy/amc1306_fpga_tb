@@ -78,7 +78,7 @@ clk 256 MHz ──/16──► CLKIN 16 MHz ──► AMC1306M25 (1-bit ΔΣ, DO
 | −3 dB 点 | 1311 Hz |
 | 群延迟 | 25 样本 = 0.400 ms |
 
-![幅频响应与系数](fir_response.png)
+![幅频响应与系数](../sim/fir/fir_response.png)
 
 > 图由 MATLAB 直接导出（`sim/fir/fir_response.png`）。阻带呈 28~30 dB 的等波纹瓣，
 > 深零点落在 −75 dB，符合等波纹设计的预期形状。
@@ -166,7 +166,7 @@ clk 256 MHz ──/16──► CLKIN 16 MHz ──► AMC1306M25 (1-bit ΔΣ, DO
 
 链路级对比（Python 定点模型，与 xsim 同一套运算）：
 
-![滤波前后波形](preview_pre_post.png)
+![滤波前后波形](../sim/fir/preview_pre_post.png)
 
 | 场景 | 滤波前 | 滤波后 |
 |---|---|---|

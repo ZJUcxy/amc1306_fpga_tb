@@ -9,6 +9,11 @@ amc1306_tb/
 ├─ README.md                        ← 本文件
 ├─ docs/spec_notes.md               ← 每条建模依据的数据手册原文 + 页码链接
 ├─ docs/result_analysis.md          ← 设计/仿真/结果分析文档（含发现的问题）
+├─ docs/report_current_loop.md      ← 电流闭环实验报告（FIR 对 5 kHz 环路的影响）
+├─ current_loop_sim/                ← 闭环仿真工程（PWM + 负载 + PI + 本采样链路）
+│   ├─ sim/amc1306_loop.py          ← 模型与四个工况
+│   ├─ sim/sweep_bandwidth.py       ← 带宽扫描
+│   └─ results/                     ← metrics.csv + 阶跃/稳态图
 └─ sim/
    ├─ gen/
    │   ├─ gen_bitstream.py          ← 比特流生成器（可重跑、可改参数）
@@ -318,3 +323,28 @@ xsim 里 `tb_fir_lpf` 会打出同样的数字（见 4.5），两边用的是同
   IP 位真行为、最坏情况（温漂/工艺角）分析。
 - 数据手册引用见 `docs/spec_notes.md`，其中明确标注了哪几条是**原文**、哪几条是**反解**、
   哪几条**取不到**（Equation 1 是图片、"Test Pattern" 内容未公开）。
+
+---
+
+## 9. 电流闭环实验（25 kHz 载波 / 5 kHz 环路）
+
+`current_loop_sim/` 把这条采样链路放进一个 25 kHz PWM、5 kHz 电流环、R-L 负载的闭环里，
+对比接入 51 抽头 FIR 前后的电流响应。完整报告见
+[`docs/report_current_loop.md`](docs/report_current_loop.md)。
+
+| 工况 | 过冲 | 建立 ±2 % |
+|---|---|---|
+| 理想传感器（800 Hz） | 7.8 % | 1.33 ms |
+| AMC1306 + sinc3（800 Hz） | 11.8 % | 1.62 ms |
+| **+ 51 抽头 FIR（同增益）** | **98 %** | **不收敛** |
+| + FIR（重调 150 Hz） | 18.3 % | 18.4 ms |
+
+结论：51 抽头 FIR 的 **0.40 ms 群延迟**是 5 kHz 控制周期的两倍，同增益下电流环失稳；
+重调后带宽只能到 150 Hz。该滤波器不适合放在 5 kHz 电流环的反馈通道里，建议反馈用 sinc3 直出、
+把滤波放到抽取之前或指令通道。
+
+```bat
+cd current_loop_sim\sim
+python amc1306_loop.py        :: 四个工况 + 出图，约 5 s
+python sweep_bandwidth.py     :: 带宽扫描
+```
