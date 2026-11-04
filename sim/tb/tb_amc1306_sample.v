@@ -1,7 +1,16 @@
 // ============================================================================
 //  tb_amc1306_sample  --  self-checking testbench for the AMC1306 sampling
-//                        module (Vivado 2022.2 / xsim)
+//                        chain + 51-tap low-pass FIR (Vivado 2022.2 / xsim)
 // ============================================================================
+//  Instantiates amc1306_chain:
+//      amc1306_sample --> valid_pre / data_pre --> fir_lpf --> valid_post / data_post
+//
+//  Every value check below is done on the *pre*-filter stream, i.e. exactly the
+//  ports of the bare AMC1306 module, so this file still doubles as the module's
+//  own testbench.  The FIR is checked in depth by tb_fir_lpf; here only its
+//  settled DC value and its valid rate are asserted (the DC sweep deliberately
+//  uses 8 samples per step, far too short for a 51-tap filter to settle).
+//
 //  DUT interface (must match amc1306_sample):
 //      clk    256 MHz system clock
 //      rst_n  asynchronous active-low reset
@@ -73,14 +82,25 @@ module tb_amc1306_sample;
     // bit replayed from the .mem file, launched on the CLKIN rising edge
     reg dout = 1'b0;
 
+    wire                     valid_post;    // after the 51-tap low-pass FIR
+    wire signed [15:0]       data_post;
+
     // ------------------------------------------------------- DUT ------------
-    amc1306_sample dut (
-        .clk    (clk),
-        .rst_n  (rst_n),
-        .en     (en),
-        .bit_in (dout),
-        .valid  (valid),
-        .data   (data)
+    // amc1306_sample -> fir_lpf.  `valid`/`data` below are the *pre*-filter
+    // signals, exactly the ports of the bare AMC1306 module, so every check in
+    // this testbench still applies unchanged.  The post-filter stream is
+    // captured separately (section 7) and only the settled values are asserted,
+    // because a 51-tap FIR needs 51 samples to settle and the DC sweep uses
+    // 8 samples per step on purpose (to keep the run short).
+    amc1306_chain u_chain (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .en         (en),
+        .bit_in     (dout),
+        .valid_pre  (valid),
+        .data_pre   (data),
+        .valid_post (valid_post),
+        .data_post  (data_post)
     );
 
     // ------------------------------------------- bitstream replay -----------
@@ -108,8 +128,12 @@ module tb_amc1306_sample;
     end
 
     // one bit per CLKIN cycle, launched on the rising edge with the datasheet
-    // valid delay tD; wraps back to the first bit so long runs never run dry
-    wire [31:0] next_idx = (bit_cnt >= BIT_DEPTH-1) ? 32'd0 : bit_cnt + 1;
+    // valid delay tD; wraps back to the first bit so long runs never run dry.
+    // tail_mode freezes the stream inside segment 0 (-250 mV) so the 51-tap FIR
+    // has a constant level to settle on for the final check.
+    reg  tail_mode = 1'b0;
+    wire [31:0] next_idx = tail_mode ? (bit_cnt % SEG_BITS)
+                                     : ((bit_cnt >= BIT_DEPTH-1) ? 32'd0 : bit_cnt + 1);
 
     always @(posedge clkin)
         if (rst_n) begin
@@ -144,6 +168,7 @@ module tb_amc1306_sample;
     integer viol_en  = 0;                   // valid while disabled
     integer viol_rst = 0;                   // valid during reset
     reg     rate_en  = 1'b1;                // output-rate counting enabled
+    integer fir_expect = 0, fir_err = 0, fir_abs = 0, fir_fail = 0;
     integer i;
 
     initial begin
@@ -203,6 +228,20 @@ module tb_amc1306_sample;
         end
     end
 
+    // ------------------------------------------- post-filter observation ---
+    integer post_n    = 0;
+    integer post_last = 0;
+    integer pre_last  = 0;
+    always @(posedge clk) begin
+        if (valid === 1'b1) begin
+            pre_last = $signed(data);
+        end
+        if (valid_post === 1'b1 && rst_n === 1'b1) begin
+            post_n    = post_n + 1;
+            post_last = $signed(data_post);
+        end
+    end
+
     // one-cycle grace: a pulse that started before en/rst_n dropped is legal,
     // so only flag valid held high once en/rst_n has already been low a cycle
     reg en_q = 1'b0, rst_q = 1'b0;
@@ -243,8 +282,12 @@ module tb_amc1306_sample;
                      rate_bad, WINDOWS);
             $display(" en gating         : %0d violations of 'valid must be low when en=0'", viol_en);
             $display(" reset             : %0d violations of 'valid must be low in reset'", viol_rst);
+            $display(" FIR valid pulses  : %0d", post_n);
+            $display(" FIR settled sample: pre %0d -> post %0d (expected %0d), |err| %0d LSB",
+                     pre_last, post_last, fir_expect, fir_abs);
 
-            if (errors == 0 && viol_en == 0 && viol_rst == 0 && rate_bad == 0 && checks > 0)
+            if (errors == 0 && viol_en == 0 && viol_rst == 0 && rate_bad == 0 &&
+                fir_fail == 0 && checks > 0)
                 $display(" RESULT: PASS");
             else
                 $display(" RESULT: FAIL");
@@ -281,6 +324,16 @@ module tb_amc1306_sample;
         @(negedge clk); en = 1'b1;
         resume_skip = SETTLE;               // written on the falling edge: no race
         repeat ((SETTLE+2)*OSR) @(posedge clkin);
+
+        // ---- 51-tap FIR needs 51 samples to settle: freeze the stream on
+        // ---- segment 0 (-250 mV) and look at the filtered output
+        @(negedge clk); tail_mode = 1'b1;
+        repeat (70*OSR) @(posedge clkin);
+        fir_expect = (seg_expected[0] * EXP_NUM) / EXP_DEN;
+        fir_err    = post_last - fir_expect;
+        if (fir_err < 0) fir_abs = -fir_err; else fir_abs = fir_err;
+        if (fir_abs > TOL_LSB) fir_fail = 1;
+        if (post_n <= 0)       fir_fail = 1;
 
         report();
         $finish;
