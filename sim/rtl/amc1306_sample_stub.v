@@ -95,7 +95,12 @@ module amc1306_sample #(
             z1 <= 32'sd0; z2 <= 32'sd0; z3 <= 32'sd0;
             dec_cnt <= {OSR_W{1'b0}};
         end
-        else if (en && tick) begin
+        // The decimator keeps running while en = 0: `en` gates the *output*
+        // (valid/data), not the filter.  Freezing the integrators here would
+        // shift the decimation phase by however long en was low, which makes
+        // every later window straddle two modulator windows -- a real bug in
+        // hardware, found by simulation.
+        else if (tick) begin
             i1 <= i1_n;
             i2 <= i2_n;
             i3 <= i3_n;

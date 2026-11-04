@@ -137,6 +137,8 @@ def main():
     ap.add_argument("--part", default="m25", choices=sorted(PARTS))
     ap.add_argument("--seg-bits", type=int, default=2048,
                     help="bits per test segment (= 8 sinc3 windows at OSR 256)")
+    ap.add_argument("--warm-bits", type=int, default=2048,
+                    help="discarded modulator warm-up bits before segment 0")
     ap.add_argument("--seed", type=int, default=20221104)
     ap.add_argument("--noise-uv", type=float, default=12.0, help="input-referred noise, uV rms")
     ap.add_argument("--offset-uv", type=float, default=4.5, help="input offset error, uV")
@@ -154,6 +156,13 @@ def main():
 
     stream = bytearray()
     state = [0.0, 0.0]
+    # warm up: the modulator starts at v1 = v2 = 0, so its first couple of
+    # windows do not yet carry the right density (one window comes out with an
+    # extra 1, i.e. ~126 LSB).  Run 8 windows at the first level and throw them
+    # away so every bit that lands in the .mem is steady state.
+    make_stream(segs[0][1], args.warm_bits, rng, v_clip,
+                args.offset_uv * 1e-6, args.noise_uv * 1e-6,
+                args.chop_uv * 1e-6, state)
     for name, vin, kind in segs:
         stream += make_stream(vin, args.seg_bits, rng, v_clip,
                               args.offset_uv * 1e-6, args.noise_uv * 1e-6,

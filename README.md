@@ -8,6 +8,7 @@
 amc1306_tb/
 ├─ README.md                        ← 本文件
 ├─ docs/spec_notes.md               ← 每条建模依据的数据手册原文 + 页码链接
+├─ docs/result_analysis.md          ← 设计/仿真/结果分析文档（含发现的问题）
 └─ sim/
    ├─ gen/
    │   ├─ gen_bitstream.py          ← 比特流生成器（可重跑、可改参数）
@@ -18,6 +19,7 @@ amc1306_tb/
    │   ├─ amc1306_lpf_51tap.coe     ← 给 FIR Compiler IP 的系数文件
    │   ├─ fir_response.png/csv      ← 幅频响应（MATLAB 出图）
    │   └─ preview_pre_post.png      ← 滤波前后波形对比
+   ├─ logs/                        ← xsim 实跑日志（sim_chain.out / sim_fir.out）
    ├─ data/
    │   ├─ scenario.mem              ← 12 段 × 2048 bit 的测试流（TB 直接读这个）
    │   ├─ segments/*.mem            ← 同样内容按电平拆开的单段文件
@@ -45,15 +47,16 @@ amc1306_tb/
 ### 方式 A：命令行（最快）
 
 ```bat
-call C:\Xilinx\Vivado\2022.2\settings64.bat
 cd /d <本目录>\sim\scripts
 run_xsim.bat            :: 两个 TB 都跑
 run_xsim.bat chain      :: 只跑链路 TB
 run_xsim.bat fir        :: 只跑滤波器 TB
 ```
 
-脚本会编译 → 精化 → 仿真，并把 `data/scenario.mem` 的绝对路径通过
-`-testplusarg MEM=...` 传给 TB（所以 xsim 的临时运行目录在哪都不影响读文件）。
+`run_xsim.bat` 只是一行转发，实际逻辑在 `run_xsim.ps1`：它会自动找
+`F:\FPGA\Vivado\2022.2`（或 C/D/E 盘的 Xilinx 安装）、导入 `settings64.bat`、
+把 `scenario.mem` 复制到 xsim 运行目录，最后打印每个 TB 的 `RESULT:`。
+日志写到 `sim/logs/`。
 
 ### 方式 B：Vivado GUI
 
@@ -300,22 +303,18 @@ xsim 里 `tb_fir_lpf` 会打出同样的数字（见 4.5），两边用的是同
 
 ---
 
-## 8. 验证状态（请先看这条）
+## 8. 验证状态
 
-- ✅ **比特数据已在本机用 Python 全量校验**：密度、逐窗口 sinc3 解码、理想码对比都跑过，
-  `scenario_meta.csv` 里是实测结果（稳态 0 LSB）。
-- ✅ **RTL 的定点运算也用逐位等价模型验证过**：`gen/golden_cic.py` 复刻了
-  `amc1306_sample_stub.v` 的 32 位补码运算（含 CIC 积分器的有意环绕），
-  对同一份 `scenario.mem` 解出的码与理想值**逐段 0 LSB**，说明"数据 + 期望码 + RTL 数据通路"
-  三者自洽：如果 xsim 里你这个 DUT 跑出别的结果，问题在 DUT 或 TB 的时序/端口，不在激励。
-- ✅ **滤波器系数由本机 MATLAB R2025b 实跑生成**（不是手算/拟合）：`.coe`、`fir_coefs.vh`、
-  响应曲线、`|H|` 测试点都来自同一次 `firpm` 运行；`gen/golden_fir.py` 用逐位等价的定点模型
-  复核：冲激响应与系数表**0 LSB 误差**，直流增益 0 LSB，四个频点的 \|H\| 与 MATLAB 相差
-  **<0.3%**。
-- ⚠️ **RTL 与 testbench 未在本机编译/仿真过**：这台机器上没装 Vivado（`xvlog/xsim`
-  不在 PATH，`C:\AMD` 下只有 Chipset_Software），所以 Verilog 部分是按 Vivado 2022.2 /
-  xsim 的语言子集写的，但没有实际跑过一次编译。第一次运行时如果报语法错，大概率集中在
-  三处：`$value$plusargs` 的字符串寄存器、`%0s` 打印定长字符串、`$log10`——前两处只影响
-  日志，第三处只影响 dB 打印，都是单行改动。
+- ✅ **已在 Vivado Simulator 2022.2 上真实编译并仿真通过**（Vivado 装在 `F:\FPGA\Vivado\2022.2`，
+  `run_xsim.ps1` 自动导入环境）：
+  - 链路 TB：158 项检查、**0 错误**，直流扫描最差 2 LSB（判据 8 LSB），`en`/复位/输出速率 0 违规；
+  - 滤波器 TB：8 项检查、**0 错误**，冲激响应与 MATLAB 系数逐点 0 LSB；
+  - 日志：`sim/logs/sim_chain.out`、`sim/logs/sim_fir.out`。
+- ✅ **比特数据用 Python 全量校验**：引入预热后，96 个窗口（含此前跳过的建立期）逐点精确。
+- ✅ **滤波器系数由 MATLAB R2025b 实跑生成**，并用逐位等价的定点模型复核（\|H\| 差 <0.3%）。
+- 📄 **完整的设计/仿真/结果分析见 [`docs/result_analysis.md`](docs/result_analysis.md)**，
+  其中第 6 节记录了仿真中发现并修复的 5 个问题（2 个 DUT 行为缺陷、2 个假通过、1 个工具链用法）。
+- ⚠️ **仍未做的**：综合/实现与时序收敛（实际会用 FIR Compiler IP 替换 `fir_lpf.v`）、
+  IP 位真行为、最坏情况（温漂/工艺角）分析。
 - 数据手册引用见 `docs/spec_notes.md`，其中明确标注了哪几条是**原文**、哪几条是**反解**、
   哪几条**取不到**（Equation 1 是图片、"Test Pattern" 内容未公开）。

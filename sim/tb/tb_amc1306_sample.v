@@ -55,6 +55,8 @@ module tb_amc1306_sample;
     localparam integer EXP_NUM = 1;
     localparam integer EXP_DEN = 1;
 
+    localparam integer DBG = 0;             // 1 = per-sample trace for debug
+
     // ------------------------------------------------------------- clock ----
     // 256 MHz requested; 2*1953 ps = 3.906 ns = 255.984 MHz (-0.016 %).
     // Exact 3.90625 ns would need a 1 fs time precision, which buys nothing
@@ -129,19 +131,24 @@ module tb_amc1306_sample;
 
     // one bit per CLKIN cycle, launched on the rising edge with the datasheet
     // valid delay tD; wraps back to the first bit so long runs never run dry.
-    // tail_mode freezes the stream inside segment 0 (-250 mV) so the 51-tap FIR
-    // has a constant level to settle on for the final check.
+    // tail_mode re-reads segment 0 (-250 mV) forever while bit_cnt keeps
+    // running, so the 51-tap FIR gets a constant level to settle on.
     reg  tail_mode = 1'b0;
-    wire [31:0] next_idx = tail_mode ? (bit_cnt % SEG_BITS)
-                                     : ((bit_cnt >= BIT_DEPTH-1) ? 32'd0 : bit_cnt + 1);
+    wire [31:0] next_idx = (bit_cnt >= BIT_DEPTH-1) ? 32'd0 : bit_cnt + 1;
+    // launch bit[bit_cnt] itself, so the DUT's first 256-bit window is exactly
+    // the generator's first window (offsetting by one would shift every window
+    // by one bit and cost up to 256 LSB at window boundaries)
+    wire [31:0] rd_idx   = tail_mode ? (bit_cnt % SEG_BITS) : bit_cnt;
 
     always @(posedge clkin)
         if (rst_n) begin
+            dout    <= #(TD_PS) bit_mem[rd_idx];
             bit_cnt <= next_idx;
-            dout    <= #(TD_PS) bit_mem[next_idx];
         end
 
-    wire [31:0] cur_seg = bit_cnt / SEG_BITS;
+    // while tail_mode is on, bit_cnt keeps running but we are always inside
+    // segment 0 -> report segment 0 to the scoreboard
+    wire [31:0] cur_seg = tail_mode ? 32'd0 : (bit_cnt / SEG_BITS);
 
     // ------------------------------------------------------- scoreboard -----
     integer   seg_expected [0:NUM_SEG-1];
@@ -182,13 +189,15 @@ module tb_amc1306_sample;
     always @(posedge clk) begin
         if (valid === 1'b1 && rst_n === 1'b1) begin
             k = cur_seg;
+            if (DBG) $display("DBG t=%0t cnt=%0d seg=%0d pre=%0d en=%b tail=%b",
+                              $time, bit_cnt, cur_seg, $signed(data), en, tail_mode);
             if (k != last_seg) begin
                 last_seg  = k;
                 skip_next = SETTLE;         // filter settling after the step
             end
             if (resume_skip > 0) begin
                 resume_skip = resume_skip - 1;
-                skip_next   = 0;
+                skip_next   = SETTLE;       // re-settle after en was low
             end
             if (rate_en) s_vc[k] = s_vc[k] + 1;
             if (skip_next > 0) begin
@@ -205,24 +214,28 @@ module tb_amc1306_sample;
                 s_n[k]   = s_n[k]   + 1;
                 s_sum[k] = s_sum[k] + got_v;
                 if (abs_v > s_max[k]) s_max[k] = abs_v;
-                if (abs_v > max_abs)  max_abs  = abs_v;
+                if (seg_kind[k] != 2 && abs_v > max_abs) max_abs = abs_v;
 
                 if (seg_kind[k] == 2) begin
                     // over-range: only "beyond +/-250 mV full scale" is checked
                     if (got_abs < CLIP_MIN) begin
                         errors  = errors + 1;
                         s_err[k] = s_err[k] + 1;
+                        if (printed < 20) begin
+                            $display("  MISMATCH seg %0d %0s Vin=%0.1f mV : clip expected, got=%0d",
+                                     k, seg_name[k], seg_vin_mv[k], got_v);
+                            printed = printed + 1;
+                        end
                     end
                 end
                 else if (abs_v > TOL_LSB) begin
                     errors  = errors + 1;
                     s_err[k] = s_err[k] + 1;
-                end
-
-                if (abs_v > TOL_LSB && printed < 20) begin
-                    $display("  MISMATCH seg %0d %0s Vin=%0.1f mV : exp=%0d got=%0d err=%0d",
-                             k, seg_name[k], seg_vin_mv[k], exp_v, got_v, err_v);
-                    printed = printed + 1;
+                    if (printed < 20) begin
+                        $display("  MISMATCH seg %0d %0s Vin=%0.1f mV : exp=%0d got=%0d err=%0d",
+                                 k, seg_name[k], seg_vin_mv[k], exp_v, got_v, err_v);
+                        printed = printed + 1;
+                    end
                 end
             end
         end
@@ -325,8 +338,9 @@ module tb_amc1306_sample;
         resume_skip = SETTLE;               // written on the falling edge: no race
         repeat ((SETTLE+2)*OSR) @(posedge clkin);
 
-        // ---- 51-tap FIR needs 51 samples to settle: freeze the stream on
-        // ---- segment 0 (-250 mV) and look at the filtered output
+        // ---- 51-tap FIR needs 51 samples to settle: replay segment 0
+        // ---- (-250 mV) from its exact start so the windows stay aligned
+        while (bit_cnt != 0) @(posedge clkin);
         @(negedge clk); tail_mode = 1'b1;
         repeat (70*OSR) @(posedge clkin);
         fir_expect = (seg_expected[0] * EXP_NUM) / EXP_DEN;

@@ -121,7 +121,7 @@ module tb_fir_lpf;
     // ------------------------------------------------- tests ----------------
     integer t, n, amp, expect_imp, err, worst_imp;
     integer worst_dc, amp_out, gain_ok;
-    real    fn, gmeas, gexp;
+    real    fn, gmeas, gexp, gdb;
 
     // one sine test: returns the measured amplitude
     task run_sine(input real fnorm, input integer nsamp, output integer ampout);
@@ -145,8 +145,10 @@ module tb_fir_lpf;
                 errors = errors + 1;
                 $display("  FAIL  %7.0f Hz : gain %.4f, expected %.4f", f_hz, gmeas, gexp_r);
             end
-            $display("  %7.0f Hz  in=%6d  out=%6d  gain=%.4f (expected %.4f, %+.1f dB)",
-                     f_hz, AMAX, ampout, gmeas, gexp_r, 20.0 * (gmeas > 0.0 ? $log10(gmeas) : -6.0));
+            if (gmeas > 0.0) gdb = 20.0 * $log10(gmeas);
+            else             gdb = -99.0;
+            $display("  %7.0f Hz  in=%6d  out=%6d  gain=%.4f  expected %.4f  (%0.2f dB)",
+                     f_hz, AMAX, ampout, gmeas, gexp_r, gdb);
         end
     endtask
 
@@ -165,13 +167,20 @@ module tb_fir_lpf;
         $display("[1] impulse response vs MATLAB coefficients");
         clear_cap;
         send(AMAX);
-        idle(TAPS + 5);
+        for (k = 0; k < TAPS + 5; k = k + 1) send(0);   // clock the tail out
+        idle(2);
 
         worst_imp = 0;
-        for (k = 0; k < TAPS; k = k + 1) begin
-            expect_imp = (AMAX * coef[k]) >>> 15;      // same shift the RTL does
-            err        = cap[k] - expect_imp;
-            if (abs_i(err) > worst_imp) worst_imp = abs_i(err);
+        if (cap_n < TAPS) begin
+            errors = errors + 1;
+            $display("  FAIL  only %0d outputs captured, expected at least %0d", cap_n, TAPS);
+        end
+        else begin
+            for (k = 0; k < TAPS; k = k + 1) begin
+                expect_imp = (AMAX * coef[k]) >>> 15;   // same shift the RTL does
+                err        = cap[k] - expect_imp;
+                if (abs_i(err) > worst_imp) worst_imp = abs_i(err);
+            end
         end
         checks = checks + 1;
         if (worst_imp > 1) begin
@@ -230,7 +239,7 @@ module tb_fir_lpf;
         for (n = 0; n < NSIN; n = n + 1) send($rtoi(AMAX * $sin(2.0 * PI * fn * n)));
         idle(2);
         for (n = 300; n < 316; n = n + 1)
-            $display("  %3d  %6d  %6d  %+7d", n, ins[n], cap[n], cap[n] - ins[n]);
+            $display("  %3d  %6d  %6d  %7d", n, ins[n], cap[n], cap[n] - ins[n]);
 
         // ---------------- 5. step response ---------------------------------
         $display("");
