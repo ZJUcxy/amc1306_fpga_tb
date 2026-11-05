@@ -56,6 +56,10 @@ DT = 0.25e-6               # integration step [s] (PWM edge resolution = 1 % dut
 T_SIM = 0.060              # 60 ms
 T_ARM = 0.002              # loop stays open until the sensor chain has settled
                            # (the sinc3 CIC needs 3 windows, the FIR 51 samples)
+
+# transport delay the Smith predictor is asked to compensate: sinc3 (24 us) +
+# 51-tap FIR (400 us) + half a control period of sampling jitter (100 us)
+SMITH_T = 0.424e-3 + 0.5 / FS_CTRL
 T_STEP_UP = 0.010          # 0 -> 5 A at 10 ms
 T_STEP_DN = 0.040          # 5 -> 2 A at 40 ms
 I_HI, I_LO = 5.0, 2.0
@@ -237,7 +241,14 @@ def command_at(t):
     return I_LO
 
 
-def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
+def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None, smith=None):
+    """Closed-loop run.
+
+    smith = None                      -> plain PI on the measured current
+          = dict(r=1.0, l=1.0, t=1.0) -> Smith predictor whose internal model
+            has R, L and transport delay scaled by these factors (1.0 = perfect
+            model, 1.2 = the real plant is 20 % larger than the model, ...)
+    """
     coef = coef if coef is not None else load_coef()
     plant = Plant()
     pwm = Pwm()
@@ -247,12 +258,24 @@ def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
     # feed-forward: duty that produces the commanded current in steady state
     ff_gain = (R_ARM / VDC)
 
+    # ---------------- Smith predictor bookkeeping -------------------------
+    use_smith = smith is not None
+    if use_smith:
+        rm = R_ARM * smith.get("r", 1.0)
+        lm = L_ARM * smith.get("l", 1.0)
+        nd = max(1, int(round(SMITH_T * smith.get("t", 1.0) / DT)))
+        zbuf = np.zeros(nd)
+        zi = 0
+        im = 0.0
+
     n = int(round(T_SIM / DT))
     t = np.zeros(n)
     ia = np.zeros(n)
     duty = np.zeros(n)
     cmd = np.zeros(n)
     meas = np.zeros(n)
+    pred = np.zeros(n)
+    pred_val = 0.0
 
     next_adc = 0.0
     next_ctrl = 0.0
@@ -265,6 +288,13 @@ def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
         tk = k * DT
         v = pwm(cur_duty, DT)
         plant.step(v, DT)
+
+        if use_smith:
+            # plant model driven by the same commanded voltage
+            im += (cur_duty * VDC - rm * im) * DT / lm
+            y_delayed = zbuf[zi]          # model output Tm ago
+            zbuf[zi] = im
+            zi = (zi + 1) % nd
 
         # latch the measurement once per PWM period, at a fixed carrier phase,
         # so the switching ripple never aliases into the current loop
@@ -287,7 +317,14 @@ def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
                 pi.integ = 0.0
             else:
                 ref = command_at(tk)
-                err = ref - ctrl_meas
+                if use_smith:
+                    # y - yhat(z^-T) + yhat : the delay is taken out of the loop
+                    fb = ctrl_meas - y_delayed + im
+                    pred_val = fb
+                else:
+                    fb = ctrl_meas
+                    pred_val = ctrl_meas
+                err = ref - fb
                 cur_duty = pi.step(err, 1.0 / FS_CTRL, ff=ref * ff_gain)
 
         t[k] = tk
@@ -295,8 +332,9 @@ def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
         duty[k] = cur_duty
         cmd[k] = command_at(tk)
         meas[k] = ctrl_meas
+        pred[k] = pred_val
 
-    return dict(t=t, i=ia, duty=duty, cmd=cmd, meas=meas)
+    return dict(t=t, i=ia, duty=duty, cmd=cmd, meas=meas, pred=pred)
 
 
 # --------------------------------------------------------------- metrics ---

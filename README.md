@@ -10,6 +10,7 @@ amc1306_tb/
 ├─ docs/spec_notes.md               ← 每条建模依据的数据手册原文 + 页码链接
 ├─ docs/result_analysis.md          ← 设计/仿真/结果分析文档（含发现的问题）
 ├─ docs/report_current_loop.md      ← 电流闭环实验报告（FIR 对 5 kHz 环路的影响）
+├─ docs/report_smith_predictor.md   ← Smith 预测器：推导 + Bode + 仿真
 ├─ current_loop_sim/                ← 闭环仿真工程（PWM + 负载 + PI + 本采样链路）
 │   ├─ sim/amc1306_loop.py          ← 模型与四个工况
 │   ├─ sim/sweep_bandwidth.py       ← 带宽扫描
@@ -347,4 +348,9 @@ xsim 里 `tb_fir_lpf` 会打出同样的数字（见 4.5），两边用的是同
 cd current_loop_sim\sim
 python amc1306_loop.py        :: 四个工况 + 出图，约 5 s
 python sweep_bandwidth.py     :: 带宽扫描
+python filter_tradeoff.py     :: 滤波器延迟 vs 过渡带宽度
+python smith_study.py         :: Smith 预测器：Bode + 闭环仿真
 ```
+
+**延迟的解法**：详见 [`docs/report_smith_predictor.md`](docs/report_smith_predictor.md)
+——Smith 预测器把 98 % 过冲 / 不收敛拉回 0.9 % / 1.4 ms，代价是 1 个乘加 + 3 个寄存器。

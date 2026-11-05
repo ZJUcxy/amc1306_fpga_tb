@@ -121,6 +121,7 @@ FIR 一项就占了总延迟的 **70 %**。相位裕度 `PM ≈ 90° − ωc·Td
 current_loop_sim/
 ├─ README.md                  ← 本文件
 ├─ sim/amc1306_loop.py        ← 模型 + 四个工况 + 出图
+├─ sim/smith_study.py         ← Smith 预测器：Bode 分析 + 闭环对比
 ├─ sim/sweep_bandwidth.py     ← 带宽扫描
 └─ results/
    ├─ metrics.csv             ← 四个工况的指标
