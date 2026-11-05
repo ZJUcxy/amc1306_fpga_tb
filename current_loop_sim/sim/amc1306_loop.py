@@ -237,8 +237,8 @@ def command_at(t):
     return I_LO
 
 
-def simulate(use_fir, fc_hz, use_bits=True, seed=1):
-    coef = load_coef()
+def simulate(use_fir, fc_hz, use_bits=True, seed=1, coef=None):
+    coef = coef if coef is not None else load_coef()
     plant = Plant()
     pwm = Pwm()
     sensor = Amc1306Chain(coef, use_fir=use_fir, use_bits=use_bits, seed=seed)
